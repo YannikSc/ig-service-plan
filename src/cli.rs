@@ -1,6 +1,20 @@
 use indicatif::style::TemplateError;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 use std::time::Duration;
+
+#[derive(Clone, Debug, clap::Parser)]
+#[command(name = "service-plan")]
+pub struct Args {
+    #[arg(help = "The path to the plan's YAML file")]
+    pub plan: PathBuf,
+    #[arg(help = "The project in which the plan is applied")]
+    pub project: String,
+    #[arg(help = "The subproject in which the plan is applied")]
+    pub subproject: String,
+    #[arg(help = "The environment on which the plan should be applied")]
+    pub environment: String,
+}
 
 pub fn show_spinner(message: &str) -> anyhow::Result<impl FnOnce()> {
     Ok(animate_spinner(build_spinner(message)?))

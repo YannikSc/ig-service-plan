@@ -1,6 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::Mutex;
 
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
@@ -15,18 +15,26 @@ pub struct FreeIps {
 }
 
 impl FreeIps {
-    pub fn ips(&mut self) -> Box<RefCell<dyn Iterator<Item = Ipv4Addr> + '_>> {
-        Box::new(RefCell::new(
-            self.network
-                .hosts()
-                .filter(move |addr| !self.taken_ips.contains(&addr.to_string())),
-        ))
+    pub fn get_ip(&mut self) -> Option<Ipv4Addr> {
+        let Some(ip) = self
+            .network
+            .hosts()
+            .filter(|addr| !self.taken_ips.contains(&addr.to_string()))
+            .next()
+        else {
+            return None;
+        };
+
+        self.taken_ips.push(ip.to_string());
+
+        Some(ip)
     }
 }
 
 pub struct ServicePlanProcessor {
     plan: ServicePlan,
     variables: HashMap<String, Box<dyn strfmt::DisplayStr>>,
+    network_ips: Mutex<HashMap<String, FreeIps>>,
     project: Option<String>,
     subproject: Option<String>,
     environment: Option<String>,
@@ -62,6 +70,7 @@ impl ServicePlanProcessor {
             project: None,
             subproject: None,
             environment: None,
+            network_ips: Default::default(),
         }
     }
 
@@ -164,9 +173,6 @@ impl ServicePlanProcessor {
             return Err(anyhow::anyhow!("The project network has to be a string!"));
         };
 
-        let mut ips = self.get_free_ips(zone, &network_zone).await?;
-        let mut ips = ips.ips();
-        let ips = ips.get_mut();
         let mut vms = Vec::new();
 
         for instance in 0..instance.replicas {
@@ -201,11 +207,7 @@ impl ServicePlanProcessor {
             if vm.get("intern_ip").is_null() {
                 vm.set(
                     "intern_ip",
-                    ips.next()
-                        .ok_or(anyhow::anyhow!(
-                            "Your project's network ({network_zone}) is full"
-                        ))?
-                        .to_string(),
+                    self.get_free_ip(zone, &network_zone).await?.to_string(),
                 )?;
             }
 
@@ -252,11 +254,17 @@ impl ServicePlanProcessor {
         Ok(new_object)
     }
 
-    async fn get_free_ips(
+    async fn get_free_ip(
         &self,
         network_zone: &str,
         network_name: &str,
-    ) -> anyhow::Result<FreeIps> {
+    ) -> anyhow::Result<Ipv4Addr> {
+        if let Some(ips) = self.network_ips.lock().unwrap().get_mut(network_name) {
+            return ips
+                .get_ip()
+                .ok_or(anyhow::anyhow!("No free IPs in network {network_name}"));
+        }
+
         let base_query = Query::builder()
             .filter("hostname", network_name.to_string())
             .filter("network_zones", contains(network_zone.to_string()))
@@ -296,7 +304,20 @@ impl ServicePlanProcessor {
             .map(|object| object.get("intern_ip").as_str().unwrap().to_string())
             .collect::<Vec<_>>();
 
-        Ok(FreeIps { taken_ips, network })
+        self.network_ips
+            .lock()
+            .unwrap()
+            .insert(network_name.to_string(), FreeIps { taken_ips, network });
+
+        self.network_ips
+            .lock()
+            .unwrap()
+            .get_mut(network_name)
+            .map(|value| value.get_ip())
+            .flatten()
+            .ok_or(anyhow::anyhow!(
+                "No free IP available in network {network_name}"
+            ))
     }
 
     async fn get_new_service_groups(

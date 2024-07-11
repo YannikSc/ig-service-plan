@@ -1,3 +1,4 @@
+use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use term_table::row::Row;
 use term_table::table_cell::TableCell;
@@ -15,16 +16,18 @@ mod processable_value;
 pub async fn main() -> anyhow::Result<()> {
     std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
 
+    let args = cli::Args::parse();
+
     let stop = show_spinner("Reading service plan")?;
-    let plan: ServicePlan = serde_yml::from_reader(std::fs::File::open("./example_service.yaml")?)?;
+    let plan: ServicePlan = serde_yml::from_reader(std::fs::File::open(args.plan)?)?;
     let mut processor = ServicePlanProcessor::new(plan);
     stop();
 
     let stop = show_spinner("Planning the service landscape")?;
     processor
-        .project("payment".to_string())
-        .subproject("yannik".to_string())
-        .environment("staging".to_string());
+        .project(args.project)
+        .subproject(args.subproject)
+        .environment(args.environment);
     let objects = processor.get_unrelational_resources().await?;
     stop();
 
