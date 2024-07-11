@@ -1,11 +1,10 @@
-use std::net::Ipv4Addr;
 use std::sync::Mutex;
 use std::{collections::HashMap, net::IpAddr};
 
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
 use adminapi::query::Query;
-use ipnet::{IpNet, Ipv4Net};
+use ipnet::IpNet;
 
 use crate::config::{ExternalFirewallRule, FirewallExport, Service, ServiceInstance, ServicePlan};
 
@@ -16,20 +15,13 @@ pub struct FreeIps {
 
 impl FreeIps {
     pub fn get_ip(&mut self) -> Option<IpAddr> {
-        let Some(ip) = self
-            .network
-            .hosts()
-            .filter(|addr| {
-                !self.taken_ips.contains(&addr.to_string())
-                    && !addr.is_loopback()
-                    && !addr.is_multicast()
-                    && !addr.is_unspecified()
-                    && !addr.to_string().ends_with("::")
-            })
-            .next()
-        else {
-            return None;
-        };
+        let ip = self.network.hosts().find(|addr| {
+            !self.taken_ips.contains(&addr.to_string())
+                && !addr.is_loopback()
+                && !addr.is_multicast()
+                && !addr.is_unspecified()
+                && !addr.to_string().ends_with("::")
+        })?;
 
         self.taken_ips.push(ip.to_string());
 
@@ -137,7 +129,7 @@ impl ServicePlanProcessor {
         let new_lbs = futures::future::try_join_all(new_lbs)
             .await?
             .into_iter()
-            .filter_map(|value| value)
+            .flatten()
             .collect::<Vec<_>>();
 
         for vm in &mut new_vms {
@@ -337,8 +329,7 @@ impl ServicePlanProcessor {
             .lock()
             .unwrap()
             .get_mut(network_name)
-            .map(|value| value.get_ip())
-            .flatten()
+            .and_then(|value| value.get_ip())
             .ok_or(anyhow::anyhow!(
                 "No free IP available in network {network_name}"
             ))
@@ -531,7 +522,7 @@ impl ServicePlanProcessor {
             anyhow::Ok(())
         })?;
 
-        return Ok(Some(loadbalancer));
+        Ok(Some(loadbalancer))
     }
 
     async fn create_lb_base_object(
