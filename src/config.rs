@@ -28,9 +28,11 @@ pub struct ServiceInstance {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-pub struct FirewallRule {
+pub struct FirewallExport {
     pub ports: Vec<String>,
     pub name: ProcessableValue,
+    #[serde(default)]
+    pub loadbalancer: Option<FirewallLoadbalancer>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -45,7 +47,14 @@ pub struct ServiceFirewall {
     #[serde(default)]
     pub intern: Vec<String>,
     #[serde(default)]
-    pub export: Vec<FirewallRule>,
+    pub export: Vec<FirewallExport>,
     #[serde(default)]
     pub import: Vec<ExternalFirewallRule>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct FirewallLoadbalancer {
+    pub name: ProcessableValue,
+    pub public_network: ProcessableValue,
+    pub health_check: ProcessableValue, // TODO: This better become a builder
 }

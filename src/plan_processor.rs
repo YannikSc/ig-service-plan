@@ -1,25 +1,31 @@
-use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
+use std::{collections::HashMap, net::IpAddr};
 
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
 use adminapi::query::Query;
-use ipnet::Ipv4Net;
+use ipnet::{IpNet, Ipv4Net};
 
-use crate::config::{ExternalFirewallRule, FirewallRule, Service, ServiceInstance, ServicePlan};
+use crate::config::{ExternalFirewallRule, FirewallExport, Service, ServiceInstance, ServicePlan};
 
 pub struct FreeIps {
     taken_ips: Vec<String>,
-    network: Ipv4Net,
+    network: IpNet,
 }
 
 impl FreeIps {
-    pub fn get_ip(&mut self) -> Option<Ipv4Addr> {
+    pub fn get_ip(&mut self) -> Option<IpAddr> {
         let Some(ip) = self
             .network
             .hosts()
-            .filter(|addr| !self.taken_ips.contains(&addr.to_string()))
+            .filter(|addr| {
+                !self.taken_ips.contains(&addr.to_string())
+                    && !addr.is_loopback()
+                    && !addr.is_multicast()
+                    && !addr.is_unspecified()
+                    && !addr.to_string().ends_with("::")
+            })
             .next()
         else {
             return None;
@@ -123,6 +129,16 @@ impl ServicePlanProcessor {
 
         let mut new_vms = self.get_new_vms(service, context).await?;
         let new_sgs = self.get_new_service_groups(service, context).await?;
+        let render_variables = context.get_render_variables(&self.variables);
+        let new_lbs =
+            service.firewall.export.iter().map(|export| {
+                self.create_loadbalancer(export, &render_variables, &context.function)
+            });
+        let new_lbs = futures::future::try_join_all(new_lbs)
+            .await?
+            .into_iter()
+            .filter_map(|value| value)
+            .collect::<Vec<_>>();
 
         for vm in &mut new_vms {
             vm.deferred(|server| {
@@ -132,12 +148,17 @@ impl ServicePlanProcessor {
                     }
                 }
 
+                for lb in &new_lbs {
+                    server.add("loadbalancer", lb.get("hostname"))?;
+                }
+
                 anyhow::Ok(())
             })?;
         }
 
         new_objects.extend(new_vms);
         new_objects.extend(new_sgs);
+        new_objects.extend(new_lbs);
 
         Ok(new_objects)
     }
@@ -167,7 +188,7 @@ impl ServicePlanProcessor {
         service: &Service,
     ) -> anyhow::Result<Vec<NewObject>> {
         let variables = context.get_render_variables(&self.variables);
-        let serde_json::Value::String(network_zone) =
+        let serde_json::Value::String(network_name) =
             instance.project_network.render(&variables)?
         else {
             return Err(anyhow::anyhow!("The project network has to be a string!"));
@@ -207,7 +228,7 @@ impl ServicePlanProcessor {
             if vm.get("intern_ip").is_null() {
                 vm.set(
                     "intern_ip",
-                    self.get_free_ip(zone, &network_zone).await?.to_string(),
+                    self.get_free_ip(&network_name).await?.to_string(),
                 )?;
             }
 
@@ -254,11 +275,7 @@ impl ServicePlanProcessor {
         Ok(new_object)
     }
 
-    async fn get_free_ip(
-        &self,
-        network_zone: &str,
-        network_name: &str,
-    ) -> anyhow::Result<Ipv4Addr> {
+    async fn get_free_ip(&self, network_name: &str) -> anyhow::Result<IpAddr> {
         if let Some(ips) = self.network_ips.lock().unwrap().get_mut(network_name) {
             return ips
                 .get_ip()
@@ -267,7 +284,6 @@ impl ServicePlanProcessor {
 
         let base_query = Query::builder()
             .filter("hostname", network_name.to_string())
-            .filter("network_zones", contains(network_zone.to_string()))
             .filter("public_networks", not(empty()))
             .restrict(["intern_ip", "hostname"]);
 
@@ -286,13 +302,21 @@ impl ServicePlanProcessor {
                 self.project.as_ref().cloned().unwrap_or_default(),
             )
             .build();
+        let pub_query = Query::builder()
+            .filter("hostname", network_name.to_string())
+            .filter("servertype", "route_network")
+            .filter("public_networks", empty())
+            .restrict(["intern_ip", "hostname"])
+            .build();
 
-        let (route_network, project_network) =
-            futures::try_join!(rn_query.request(), pn_query.request(),)?;
+        let (route_network, project_network, public_network) =
+            futures::try_join!(rn_query.request(), pn_query.request(), pub_query.request())?;
 
-        let network = route_network.one().or_else(|_| project_network.one())?;
+        let network = route_network
+            .one()
+            .or_else(|_| project_network.one().or_else(|_| public_network.one()))?;
         let intern_ip = network.get("intern_ip").as_str().unwrap().to_string();
-        let network = intern_ip.parse::<Ipv4Net>()?;
+        let network = intern_ip.parse::<IpNet>()?;
         let taken_ips = Query::builder()
             .filter("intern_ip", contained_only_by(intern_ip))
             .restrict(["intern_ip"])
@@ -353,7 +377,7 @@ impl ServicePlanProcessor {
 
     async fn create_export_sg(
         &self,
-        export: &FirewallRule,
+        export: &FirewallExport,
         context_variables: &HashMap<String, &dyn strfmt::DisplayStr>,
         function: &str,
     ) -> anyhow::Result<NewObject> {
@@ -372,6 +396,7 @@ impl ServicePlanProcessor {
 
         anyhow::Ok(service_group)
     }
+
     async fn create_import_sg(
         &self,
         import: &ExternalFirewallRule,
@@ -447,6 +472,74 @@ impl ServicePlanProcessor {
         function: &str,
     ) -> anyhow::Result<NewObject> {
         let mut new_object = NewObject::get_or_create("service_group", hostname).await?;
+        new_object.set("hostname", hostname.to_string())?;
+
+        if let Some(value) = &self.project {
+            new_object.set("project", value.clone())?;
+        }
+        if let Some(value) = &self.subproject {
+            new_object.set("subproject", value.clone())?;
+        }
+        if let Some(value) = &self.environment {
+            new_object.set("environment", value.clone())?;
+        }
+
+        new_object.set("function", function.to_string())?;
+
+        Ok(new_object)
+    }
+
+    async fn create_loadbalancer(
+        &self,
+        firewall_export: &FirewallExport,
+        context_variables: &HashMap<String, &dyn strfmt::DisplayStr>,
+        function: &str,
+    ) -> anyhow::Result<Option<NewObject>> {
+        let Some(loadbalancer) = &firewall_export.loadbalancer else {
+            return Ok(None);
+        };
+
+        let sg_hostname = firewall_export.name.render(context_variables)?;
+        let serde_json::Value::String(lb_hostname) = loadbalancer.name.render(context_variables)?
+        else {
+            return Err(anyhow::anyhow!(
+                "The loadbalancer hostname has to be a string"
+            ));
+        };
+        let hc_name = loadbalancer.health_check.render(context_variables)?;
+        let serde_json::Value::String(network_name) =
+            loadbalancer.public_network.render(context_variables)?
+        else {
+            return Err(anyhow::anyhow!("public_network has to be a string"));
+        };
+        let lb_ip = self.get_free_ip(&network_name).await?;
+
+        let mut loadbalancer = self.create_lb_base_object(&lb_hostname, function).await?;
+        loadbalancer
+            .add("health_checks", hc_name)?
+            .set("min_nodes", 1)?
+            .set("min_nodes_action", "force_down")?
+            .set("symmetric_nat", serde_json::Value::Bool(false))?;
+
+        if loadbalancer.get("intern_ip").is_null() {
+            loadbalancer.set("intern_ip", lb_ip.to_string())?;
+        }
+
+        loadbalancer.deferred(|server| {
+            server.add("service_groups", sg_hostname)?;
+
+            anyhow::Ok(())
+        })?;
+
+        return Ok(Some(loadbalancer));
+    }
+
+    async fn create_lb_base_object(
+        &self,
+        hostname: &str,
+        function: &str,
+    ) -> anyhow::Result<NewObject> {
+        let mut new_object = NewObject::get_or_create("loadbalancer", hostname).await?;
         new_object.set("hostname", hostname.to_string())?;
 
         if let Some(value) = &self.project {
