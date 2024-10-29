@@ -12,12 +12,7 @@ mod config;
 mod plan_processor;
 mod processable_value;
 
-#[tokio::main]
-pub async fn main() -> anyhow::Result<()> {
-//    std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
-
-    let args = cli::Args::parse();
-
+async fn apply(args: crate::cli::Apply) -> anyhow::Result<()> {
     let stop = show_spinner("Reading service plan")?;
     let plan: ServicePlan = serde_yml::from_reader(std::fs::File::open(args.plan)?)?;
     let mut processor = ServicePlanProcessor::new(plan);
@@ -138,4 +133,15 @@ pub async fn main() -> anyhow::Result<()> {
     println!("\n\nDone. Enjoy your system!");
 
     Ok(())
+}
+
+#[tokio::main]
+pub async fn main() -> anyhow::Result<()> {
+    //    std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
+
+    let args = cli::Args::parse();
+
+    match args.subcommand {
+        cli::Subcommands::Apply(args) => apply(args).await,
+    }
 }

@@ -4,8 +4,24 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Clone, Debug, clap::Parser)]
-#[command(name = "service-plan")]
 pub struct Args {
+    #[clap(subcommand)]
+    pub subcommand: Subcommands,
+}
+
+#[derive(Clone, Debug, clap::Subcommand)]
+pub enum Subcommands {
+    /// Applies a given service plan
+    Apply(Apply),
+    // /// Deletes all objects by hostname created in this plan
+    // Delete(Delete)
+    // /// Dumps the diff of the current state and the state currently applied
+    // Diff(Diff)
+}
+
+#[derive(Clone, Debug, clap::Args)]
+#[command(name = "service-plan")]
+pub struct Apply {
     #[arg(help = "The path to the plan's YAML file")]
     pub plan: PathBuf,
     #[arg(help = "The project in which the plan is applied")]
