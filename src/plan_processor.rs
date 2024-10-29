@@ -485,21 +485,67 @@ impl ServicePlanProcessor {
         firewall_export: &FirewallExport,
         context_variables: &HashMap<String, &dyn strfmt::DisplayStr>,
         function: &str,
-    ) -> anyhow::Result<Option<NewObject>> {
-        let Some(loadbalancer) = &firewall_export.loadbalancer else {
-            return Ok(None);
+    ) -> anyhow::Result<Vec<NewObject>> {
+        let mut objects = Vec::new();
+        let Some(loadbalancer_config) = &firewall_export.loadbalancer else {
+            return Ok(Vec::new());
         };
 
         let sg_hostname = firewall_export.name.render(context_variables)?;
-        let serde_json::Value::String(lb_hostname) = loadbalancer.name.render(context_variables)?
+        let serde_json::Value::String(lb_hostname) =
+            loadbalancer_config.name.render(context_variables)?
         else {
             return Err(anyhow::anyhow!(
                 "The loadbalancer hostname has to be a string"
             ));
         };
-        let hc_name = loadbalancer.health_check.render(context_variables)?;
-        let serde_json::Value::String(network_name) =
-            loadbalancer.public_network.render(context_variables)?
+        let hc_name = match &loadbalancer_config.health_check {
+            crate::config::HealthCheck::Import { name } => {
+                let serde_json::Value::String(name) = name.render(context_variables)? else {
+                    return Err(anyhow::anyhow!(
+                        "The healthcheck hostname has to be a string"
+                    ));
+                };
+
+                name
+            }
+            crate::config::HealthCheck::Create(hc_config) => {
+                let serde_json::Value::String(name) = hc_config.name.render(context_variables)?
+                else {
+                    return Err(anyhow::anyhow!(
+                        "The healthcheck hostname has to be a string"
+                    ));
+                };
+                let mut hc = self
+                    .create_hc_base_object(&name, function, hc_config.port)
+                    .await?;
+
+                hc.set("hc_type", hc_config.typ.clone())?
+                    .set("hc_dbname", hc_config.db_name.clone())?
+                    .set("hc_query", hc_config.http_query.clone())?
+                    .set("hc_user", hc_config.user.clone())?
+                    .set("hc_host", hc_config.hostname.clone())?;
+
+                hc_config
+                    .drain_codes
+                    .iter()
+                    .map(|code| hc.add("hc_drain_codes", *code).map(|_| ()))
+                    .collect::<Result<(), _>>()?;
+
+                hc_config
+                    .ok_codes
+                    .iter()
+                    .map(|code| hc.add("hc_ok_codes", *code).map(|_| ()))
+                    .collect::<Result<(), _>>()?;
+
+                objects.push(hc);
+
+                name
+            }
+        };
+        let serde_json::Value::String(network_name) = loadbalancer_config
+            .public_network
+            .render(context_variables)?
         else {
             return Err(anyhow::anyhow!("public_network has to be a string"));
         };
@@ -507,7 +553,6 @@ impl ServicePlanProcessor {
 
         let mut loadbalancer = self.create_lb_base_object(&lb_hostname, function).await?;
         loadbalancer
-            .add("health_checks", hc_name)?
             .set("min_nodes", 1)?
             .set("min_nodes_action", "force_down")?
             .set("symmetric_nat", serde_json::Value::Bool(false))?;
@@ -518,11 +563,14 @@ impl ServicePlanProcessor {
 
         loadbalancer.deferred(|server| {
             server.add("service_groups", sg_hostname)?;
+            server.add("health_checks", hc_name)?;
 
             anyhow::Ok(())
         })?;
 
-        Ok(Some(loadbalancer))
+        objects.push(loadbalancer);
+
+        Ok(objects)
     }
 
     async fn create_lb_base_object(
@@ -544,6 +592,31 @@ impl ServicePlanProcessor {
         }
 
         new_object.set("function", function.to_string())?;
+
+        Ok(new_object)
+    }
+
+    async fn create_hc_base_object(
+        &self,
+        hostname: &str,
+        function: &str,
+        port: u16,
+    ) -> anyhow::Result<NewObject> {
+        let mut new_object = NewObject::get_or_create("health_check", hostname).await?;
+        new_object.set("hostname", hostname.to_string())?;
+
+        if let Some(value) = &self.project {
+            new_object.set("project", value.clone())?;
+        }
+        if let Some(value) = &self.subproject {
+            new_object.set("subproject", value.clone())?;
+        }
+        if let Some(value) = &self.environment {
+            new_object.set("environment", value.clone())?;
+        }
+
+        new_object.set("function", function.to_string())?;
+        new_object.set("hc_port", port.to_string())?;
 
         Ok(new_object)
     }

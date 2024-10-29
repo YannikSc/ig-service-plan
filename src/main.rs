@@ -14,7 +14,7 @@ mod processable_value;
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
-    std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
+//    std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
 
     let args = cli::Args::parse();
 

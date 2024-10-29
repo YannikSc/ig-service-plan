@@ -9,9 +9,6 @@ pub struct ServicePlan {
 
 pub type ServiceVm = HashMap<String, ProcessableValue>;
 
-/// TODO: Add LoadBalancers
-///
-///
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Service {
     pub instances: ServiceInstances,
@@ -56,5 +53,32 @@ pub struct ServiceFirewall {
 pub struct FirewallLoadbalancer {
     pub name: ProcessableValue,
     pub public_network: ProcessableValue,
-    pub health_check: ProcessableValue, // TODO: This better become a builder
+    pub health_check: HealthCheck,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthCheck {
+    Import { name: ProcessableValue },
+    Create(HealthCheckField),
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct HealthCheckField {
+    pub name: ProcessableValue,
+    pub port: u16,
+    #[serde(rename = "type")]
+    pub typ: String,
+    #[serde(default)]
+    pub hostname: String,
+    #[serde(default)]
+    pub ok_codes: Vec<i32>,
+    #[serde(default)]
+    pub drain_codes: Vec<i32>,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub db_name: String,
+    #[serde(default)]
+    pub http_query: String,
 }
