@@ -15,6 +15,13 @@ services:
         - ports:
             - tcp5432
           name: !template "{subproject}-{environment}-psql-server.{project}.sg"
+          loadbalancer: # Create a loadbalancer
+            name: !template "{subproject}-{environment}-{function}.{project}.innogames.net"
+            public_network: "multihome-awtest-ipv6only-pub"
+            health_check: !create
+              name: !template "{subproject}-{environment}-{function}.{project}.hc"
+              port: 3306
+              type: tcp
       import: # Used to create client SG from remote SG
         - ports:
             - tcp8140
@@ -34,7 +41,6 @@ services:
         - "int:innogames:stable"
       puppet_master: payment-puppet.admin.innogames.fail
       puppet_ca: puppetca.admin.innogames.fail
-
 
   web:
     instances:

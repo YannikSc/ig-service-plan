@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use term_table::row::Row;
@@ -102,7 +103,12 @@ async fn apply(args: crate::cli::Apply) -> anyhow::Result<()> {
         let progress = progress.clone();
 
         Box::pin(async move {
-            let result = object.commit().await;
+            let hostname = object.get("hostname");
+            let hostname = hostname.as_str().unwrap_or_default();
+            let result = object
+                .commit()
+                .await
+                .context(format!("Creating object {hostname:?}"));
             progress.inc(1);
 
             result
@@ -137,7 +143,7 @@ async fn apply(args: crate::cli::Apply) -> anyhow::Result<()> {
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
-    //    std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
+    // std::env::set_var(adminapi::config::ENV_NAME_BASE_URL, "http://127.0.0.1:8080");
 
     let args = cli::Args::parse();
 

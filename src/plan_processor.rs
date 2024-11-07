@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 use std::{collections::HashMap, net::IpAddr};
 
+use adminapi::commit::AttributeValue;
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
 use adminapi::query::Query;
@@ -141,6 +142,10 @@ impl ServicePlanProcessor {
                 }
 
                 for lb in &new_lbs {
+                    if lb.get("servertype").as_str().unwrap_or_default() != "loadbalancer" {
+                        continue;
+                    }
+
                     server.add("loadbalancer", lb.get("hostname"))?;
                 }
 
@@ -361,7 +366,9 @@ impl ServicePlanProcessor {
 
         rules.extend(export);
         rules.extend(import);
-        rules.push(intern);
+        if let Some(intern) = intern {
+            rules.push(intern);
+        }
 
         Ok(rules)
     }
@@ -429,7 +436,11 @@ impl ServicePlanProcessor {
         &self,
         service: &Service,
         function: &str,
-    ) -> anyhow::Result<NewObject> {
+    ) -> anyhow::Result<Option<NewObject>> {
+        if service.firewall.intern.is_empty() {
+            return anyhow::Ok(None);
+        }
+
         let hostname = format!(
             "{}-{}-{}-intern.{}.sg",
             self.subproject.as_ref().cloned().unwrap_or_default(),
@@ -454,7 +465,7 @@ impl ServicePlanProcessor {
             })?;
         }
 
-        anyhow::Ok(service_group)
+        anyhow::Ok(Some(service_group))
     }
 
     async fn create_sg_base_object(
@@ -516,15 +527,27 @@ impl ServicePlanProcessor {
                         "The healthcheck hostname has to be a string"
                     ));
                 };
-                let mut hc = self
-                    .create_hc_base_object(&name, function, hc_config.port)
-                    .await?;
+                let mut hc = self.create_hc_base_object(&name, hc_config.port).await?;
 
-                hc.set("hc_type", hc_config.typ.clone())?
-                    .set("hc_dbname", hc_config.db_name.clone())?
-                    .set("hc_query", hc_config.http_query.clone())?
-                    .set("hc_user", hc_config.user.clone())?
-                    .set("hc_host", hc_config.hostname.clone())?;
+                if !hc_config.typ.is_empty() {
+                    hc.set("hc_type", hc_config.typ.clone())?;
+                }
+
+                if !hc_config.http_query.is_empty() {
+                    hc.set("hc_query", hc_config.http_query.clone())?;
+                }
+
+                if !hc_config.user.is_empty() {
+                    hc.set("hc_user", hc_config.user.clone())?;
+                }
+
+                if !hc_config.hostname.is_empty() {
+                    hc.set("hc_host", hc_config.hostname.clone())?;
+                }
+
+                if !hc_config.db_name.is_empty() {
+                    hc.set("hc_dbname", hc_config.db_name.clone())?;
+                }
 
                 hc_config
                     .drain_codes
@@ -596,12 +619,7 @@ impl ServicePlanProcessor {
         Ok(new_object)
     }
 
-    async fn create_hc_base_object(
-        &self,
-        hostname: &str,
-        function: &str,
-        port: u16,
-    ) -> anyhow::Result<NewObject> {
+    async fn create_hc_base_object(&self, hostname: &str, port: u16) -> anyhow::Result<NewObject> {
         let mut new_object = NewObject::get_or_create("health_check", hostname).await?;
         new_object.set("hostname", hostname.to_string())?;
 
@@ -611,12 +629,8 @@ impl ServicePlanProcessor {
         if let Some(value) = &self.subproject {
             new_object.set("subproject", value.clone())?;
         }
-        if let Some(value) = &self.environment {
-            new_object.set("environment", value.clone())?;
-        }
 
-        new_object.set("function", function.to_string())?;
-        new_object.set("hc_port", port.to_string())?;
+        new_object.set("hc_port", port.clone() as i32)?;
 
         Ok(new_object)
     }
