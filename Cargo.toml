@@ -14,7 +14,7 @@ serde_json = "1.0"
 anyhow = "1.0"
 futures = "0.3"
 tokio = { version = "1.37", features = ["full"] }
-adminapi = { path = "../../innogames/serveradmin/rust" }
+adminapi = { git = "https://github.com/YannikSc/serveradmin.git" }
 strfmt = "0.2"
 serde_yml = "0.0.10"
 indicatif = "0.17"

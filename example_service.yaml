@@ -1,55 +1,43 @@
 services:
-  psql: # Function
+  psql:
     instances:
-      af: # network_zone
-        replicas: 2 # Server Count
-        project_network: !template "af.wallet.{environment}" # Name of the project network
-      aw:
+      af:
         replicas: 1
-        project_network: !template "aw.wallet.{environment}"
+        project_network: !template "{environment}.{project}.ig.local"
+      aw:
+        replicas: 2
+        project_network: !template "{environment}.{project}.ig.local"
     firewall:
-      intern: # Used for internal SG
-        - tcp5432
-        - tcp22
-      export: # Used to create server SG
-        - ports:
-            - tcp5432
-          name: !template "{subproject}-{environment}-psql-server.{project}.sg"
-          loadbalancer: # Create a loadbalancer
+      intern:
+        - tcp5432 # PostgreSQL replication
+        - tcp22 # Repmgr management via SSH
+      export:
+        - ports: [tcp5432]
+          name: !template "{subproject}-{environment}-{function}-server.{project}.sg"
+          loadbalancer:
             name: !template "{subproject}-{environment}-{function}.{project}.innogames.net"
-            public_network: "multihome-awtest-ipv6only-pub"
-            health_check: !create
-              name: !template "{subproject}-{environment}-{function}.{project}.hc"
-              port: 3306
-              type: tcp
-      import: # Used to create client SG from remote SG
-        - ports:
-            - tcp8140
-          service: puppet
-          references:
-            - puppetca-server.admin.sg
-            - puppet.admin.sg
-            - puppet-admin-server.admin.sg
-    vm: # Additional args for created VMs
-      os: bookworm
+            public_network: "multihome-afaw-ipv6only-pub"
+            health_check: !import
+              name: !template "postgres.{project}.hc"
+
+    vm:
+      os: "rolling"
+      backup_disabled: false
       puppet_classes:
-        - !template "{project}::psql"
-        - !template "{project}::repmgr"
-      backup_disabled: true
+        - !template "{project}::{function}"
       repositories:
-        - !template "int:{project}_bookworm:stable"
         - "int:innogames:stable"
-      puppet_master: payment-puppet.admin.innogames.fail
-      puppet_ca: puppetca.admin.innogames.fail
+        - "int:gamejam_rolling:testing"
+      puppet_master: !template "puppet-lb.{project}.innogames.net"
+      puppet_ca: !template "puppet-ca-lb.{project}.innogames.net"
+      service_groups:
+        - !template "puppet-clients.{project}.sg"
 
   web:
     instances:
       af:
-        replicas: 4
-        project_network: !template "af.wallet.{environment}"
-      aw:
-        replicas: 4
-        project_network: !template "aw.wallet.{environment}"
+        replicas: 1
+        project_network: !template "{environment}.{project}.ig.local"
     firewall:
       import:
         - ports:
@@ -57,13 +45,31 @@ services:
           service: psql
           references:
             - !template "{subproject}-{environment}-psql-server.{project}.sg"
+      export:
+        - ports:
+            - tcp443
+            - tcp80
+          name: !template "{subproject}-{environment}-{function}-server.{project}.sg"
+          loadbalancer:
+            name: !template "{subproject}-{environment}-{function}.{project}.innogames.net"
+            public_network: "multihome-afaw-ipv6only-pub"
+            health_check: !create
+              name: !template "{subproject}-{environment}-{function}.{project}.hc"
+              port: 443
+              type: http
+              query: "GET /health"
+              ok_codes:
+                - 200
     vm:
-      os: bookworm
-      puppet_classes:
-        - !template "{project}::web"
+      os: "rolling"
       backup_disabled: true
+      puppet_classes:
+        - !template "{project}::{function}"
       repositories:
-        - !template "int:{project}_bookworm:stable"
         - "int:innogames:stable"
-      puppet_master: payment-puppet.admin.innogames.fail
-      puppet_ca: puppetca.admin.innogames.fail
+        - "int:gamejam:internal"
+        - "int:gamejam_rolling:testing"
+      puppet_master: !template "puppet-{project}-lb.admin.innogames.net"
+      puppet_ca: !template "puppetca.innogames.de"
+      service_groups:
+        - !template "puppet-clients.{project}.sg"
