@@ -13,8 +13,69 @@ mod config;
 mod plan_processor;
 mod processable_value;
 
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BriefServerObject {
+    hostname: String,
+    servertype: String,
+    #[serde(default)]
+    state: String,
+}
+
+async fn show_unmanaged_objects(
+    managed_objects: Vec<String>,
+    project: String,
+    subproject: String,
+    environment: String,
+) -> anyhow::Result<()> {
+    let all_selected_objects = adminapi::query::Query::builder()
+        .filter("project", project.clone())
+        .filter("subproject", subproject.clone())
+        .filter("environment", environment.clone())
+        .restrict(["hostname", "servertype", "state"])
+        .build()
+        .request_typed::<BriefServerObject>()
+        .await?
+        .all()
+        .into_iter()
+        .filter(|obj| !managed_objects.contains(&obj.attributes.hostname))
+        .collect::<Vec<_>>();
+
+    if all_selected_objects.is_empty() {
+        return Ok(());
+    }
+
+    let header_style = console::Style::new().bold();
+    let mut unmanaged_object_table = term_table::Table::new();
+    unmanaged_object_table.add_row(Row::new(vec![
+        TableCell::new(header_style.apply_to("hostname")),
+        TableCell::new(header_style.apply_to("servertype")),
+        TableCell::new(header_style.apply_to("state")),
+    ]));
+    for obj in all_selected_objects {
+        unmanaged_object_table.add_row(Row::new(vec![
+            TableCell::new(obj.attributes.hostname),
+            TableCell::new(obj.attributes.servertype),
+            TableCell::new(obj.attributes.state),
+        ]));
+    }
+
+    println!("\nOther (unmanaged) objects with the given selector (project={project} subproject={subproject} environment={environment}):");
+
+    println!("{}", unmanaged_object_table.render());
+
+    println!();
+
+    Ok(())
+}
+
 async fn apply(args: crate::cli::Apply) -> anyhow::Result<()> {
     let stop = show_spinner("Reading service plan")?;
+    let crate::cli::Apply {
+        project,
+        subproject,
+        environment,
+        ..
+    } = args.clone();
     let plan: ServicePlan = serde_yml::from_reader(std::fs::File::open(args.plan)?)?;
     let mut processor = ServicePlanProcessor::new(plan);
     stop();
@@ -63,6 +124,22 @@ async fn apply(args: crate::cli::Apply) -> anyhow::Result<()> {
     ]));
 
     println!("{}", table.render());
+
+    show_unmanaged_objects(
+        objects
+            .iter()
+            .map(|obj| {
+                obj.get("hostname")
+                    .as_str()
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>(),
+        project,
+        subproject,
+        environment,
+    )
+    .await?;
 
     if !objects.iter().any(|obj| obj.is_new() || obj.has_changes()) {
         println!("No pending changes");

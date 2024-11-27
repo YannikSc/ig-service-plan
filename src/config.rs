@@ -80,5 +80,5 @@ pub struct HealthCheckField {
     #[serde(default)]
     pub db_name: String,
     #[serde(default)]
-    pub http_query: String,
+    pub query: String,
 }

@@ -1,7 +1,6 @@
 use std::sync::Mutex;
 use std::{collections::HashMap, net::IpAddr};
 
-use adminapi::commit::AttributeValue;
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
 use adminapi::query::Query;
@@ -533,8 +532,8 @@ impl ServicePlanProcessor {
                     hc.set("hc_type", hc_config.typ.clone())?;
                 }
 
-                if !hc_config.http_query.is_empty() {
-                    hc.set("hc_query", hc_config.http_query.clone())?;
+                if !hc_config.query.is_empty() {
+                    hc.set("hc_query", hc_config.query.clone())?;
                 }
 
                 if !hc_config.user.is_empty() {
