@@ -550,15 +550,11 @@ impl ServicePlanProcessor {
 
                 hc_config
                     .drain_codes
-                    .iter()
-                    .map(|code| hc.add("hc_drain_codes", *code).map(|_| ()))
-                    .collect::<Result<(), _>>()?;
+                    .iter().try_for_each(|code| hc.add("hc_drain_codes", *code).map(|_| ()))?;
 
                 hc_config
                     .ok_codes
-                    .iter()
-                    .map(|code| hc.add("hc_ok_codes", *code).map(|_| ()))
-                    .collect::<Result<(), _>>()?;
+                    .iter().try_for_each(|code| hc.add("hc_ok_codes", *code).map(|_| ()))?;
 
                 objects.push(hc);
 
@@ -629,7 +625,7 @@ impl ServicePlanProcessor {
             new_object.set("subproject", value.clone())?;
         }
 
-        new_object.set("hc_port", port.clone() as i32)?;
+        new_object.set("hc_port", port as i32)?;
 
         Ok(new_object)
     }
