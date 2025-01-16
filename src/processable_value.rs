@@ -63,7 +63,7 @@ struct ProcessableValueVisitor;
 
 struct TagStringVisitor;
 
-impl<'de> Visitor<'de> for TagStringVisitor {
+impl Visitor<'_> for TagStringVisitor {
     type Value = String;
 
     fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
