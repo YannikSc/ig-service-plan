@@ -4,6 +4,7 @@ use std::{collections::HashMap, net::IpAddr};
 use adminapi::filter::*;
 use adminapi::new_object::NewObject;
 use adminapi::query::Query;
+use futures::TryFutureExt;
 use ipnet::IpNet;
 
 use crate::config::{ExternalFirewallRule, FirewallExport, Service, ServiceInstance, ServicePlan};
@@ -280,12 +281,12 @@ impl ServicePlanProcessor {
 
         let base_query = Query::builder()
             .filter("hostname", network_name.to_string())
-            .filter("public_networks", not(empty()))
             .restrict(["intern_ip", "hostname"]);
 
         let rn_query = base_query
             .clone()
             .filter("servertype", "route_network")
+            .filter("public_networks", not(empty()))
             .filter(
                 "assigned_to",
                 self.project.as_ref().cloned().unwrap_or_default(),
@@ -305,12 +306,22 @@ impl ServicePlanProcessor {
             .restrict(["intern_ip", "hostname"])
             .build();
 
-        let (route_network, project_network, public_network) =
-            futures::try_join!(rn_query.request(), pn_query.request(), pub_query.request())?;
+        let (route_network, project_network, public_network) = futures::try_join!(
+            rn_query
+                .request()
+                .map_err(|err| anyhow::anyhow!("Unable to query route_network: {err}")),
+            pn_query
+                .request()
+                .map_err(|err| anyhow::anyhow!("Unable to query project_network: {err}")),
+            pub_query
+                .request()
+                .map_err(|err| anyhow::anyhow!("Unable to query public_network: {err}"))
+        )?;
 
         let network = route_network
             .one()
-            .or_else(|_| project_network.one().or_else(|_| public_network.one()))?;
+            .or_else(|_| project_network.one().or_else(|_| public_network.one()))
+            .map_err(|err| anyhow::anyhow!("Unable to get network: {err}"))?;
         let intern_ip = network.get("intern_ip").as_str().unwrap().to_string();
         let network = intern_ip.parse::<IpNet>()?;
         let taken_ips = Query::builder()
@@ -318,7 +329,8 @@ impl ServicePlanProcessor {
             .restrict(["intern_ip"])
             .build()
             .request()
-            .await?
+            .await
+            .map_err(|err| anyhow::anyhow!("Unable to query taken IPs {err}"))?
             .all()
             .into_iter()
             .map(|object| object.get("intern_ip").as_str().unwrap().to_string())
@@ -550,11 +562,13 @@ impl ServicePlanProcessor {
 
                 hc_config
                     .drain_codes
-                    .iter().try_for_each(|code| hc.add("hc_drain_codes", *code).map(|_| ()))?;
+                    .iter()
+                    .try_for_each(|code| hc.add("hc_drain_codes", *code).map(|_| ()))?;
 
                 hc_config
                     .ok_codes
-                    .iter().try_for_each(|code| hc.add("hc_ok_codes", *code).map(|_| ()))?;
+                    .iter()
+                    .try_for_each(|code| hc.add("hc_ok_codes", *code).map(|_| ()))?;
 
                 objects.push(hc);
 

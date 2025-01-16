@@ -12,6 +12,7 @@ pub type ServiceVm = HashMap<String, ProcessableValue>;
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Service {
     pub instances: ServiceInstances,
+    #[serde(default)]
     pub firewall: ServiceFirewall,
     pub vm: ServiceVm,
 }
@@ -39,7 +40,7 @@ pub struct ExternalFirewallRule {
     pub references: Vec<ProcessableValue>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct ServiceFirewall {
     #[serde(default)]
     pub intern: Vec<String>,
